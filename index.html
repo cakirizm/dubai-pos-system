@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#0d1726">
   <title>NEXPOS Restaurant UAE</title>
-  <meta name="description" content="Restaurant POS, KDS, inventory, purchasing and accounting for UAE businesses">
+  <meta name="description" content="Restaurant POS, KDS, inventory, purchasing and accounting for UAE businesses">\n  <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="/restaurant.css">
 </head>
 <body>
@@ -13,5 +13,5 @@
   <script src="/restaurant-data.js"></script>
   <script src="/restaurant-views.js"></script>
   <script src="/restaurant-actions.js"></script>
-</body>
+  <script>if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("/sw.js").catch(()=>{}))}</script>\n</body>
 </html>
