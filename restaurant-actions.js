@@ -40,6 +40,7 @@ function handleAction(action,el){
   if(action==='new-reservation'){session.modal={type:'reservation'};return renderApp()}
   if(action==='open-shift'){session.modal={type:'shift'};return renderApp()}
   if(action==='add-menu-item'){session.modal={type:'menuItem'};return renderApp()}
+  if(action==='add-modifier'){session.modal={type:'modifierAdmin'};return renderApp()}
   if(action==='add-supplier'){session.modal={type:'supplier'};return renderApp()}
   if(action==='add-staff'){session.modal={type:'staff'};return renderApp()}
   if(action==='print-receipt'){window.print();return}
@@ -68,6 +69,7 @@ function bindForms(){
     openShiftForm:openShift,
     closeShiftForm:closeShift,
     menuItemForm:saveMenuItem,
+    modifierAdminForm:addModifierGroup,
     supplierForm:addSupplier,
     staffForm:addStaff,
     businessForm:saveBusiness
@@ -314,13 +316,23 @@ function saveMenuItem(form){
   const recipe=db.ingredients.map(x=>({ingredientId:x.id,qty:Number(fd.get('recipe_'+x.id)||0)})).filter(x=>x.qty>0);
   const modifierGroupIds=fd.getAll('modifierGroupIds');
   if(existing){
-    existing.name=fd.get('name');existing.categoryId=fd.get('categoryId');existing.stationId=fd.get('stationId');existing.price=Number(fd.get('price')||0);existing.recipe=recipe;existing.modifierGroupIds=modifierGroupIds;
+    existing.name=fd.get('name');existing.categoryId=fd.get('categoryId');existing.stationId=fd.get('stationId');existing.price=Number(fd.get('price')||0);existing.active=fd.get('active')==='on';existing.recipe=recipe;existing.modifierGroupIds=modifierGroupIds;
     audit('Menu item updated',{itemId:existing.id,recipeLines:recipe.length});
   }else{
-    const i={id:uid('P'),name:fd.get('name'),categoryId:fd.get('categoryId'),stationId:fd.get('stationId'),price:Number(fd.get('price')||0),active:true,modifierGroupIds,recipe};
+    const i={id:uid('P'),name:fd.get('name'),categoryId:fd.get('categoryId'),stationId:fd.get('stationId'),price:Number(fd.get('price')||0),active:fd.get('active')==='on',modifierGroupIds,recipe};
     db.menuItems.push(i);audit('Menu item created',{itemId:i.id,recipeLines:recipe.length});
   }
   saveDb();session.modal=null;renderApp();toast('Menu and recipe saved');
+}
+function addModifierGroup(form){
+  const fd=new FormData(form),name=fd.get('name'),max=Math.max(1,Number(fd.get('max')||1)),required=fd.get('required')==='true';
+  const options=String(fd.get('options')||'').split(/\n+/).map(line=>line.trim()).filter(Boolean).map(line=>{
+    const [label,price]=line.split('|').map(x=>x.trim());
+    return {id:uid('M'),name:label,price:Number(price||0)};
+  }).filter(o=>o.name);
+  if(!name||!options.length)return toast('Add at least one modifier option.','bad');
+  db.modifiers.push({id:uid('MG'),name,required,max,options});
+  audit('Modifier group created',{name,options:options.length});saveDb();session.modal=null;renderApp();toast('Modifier group added');
 }
 function addSupplier(form){
   const fd=new FormData(form);db.suppliers.push({id:uid('SUP'),name:fd.get('name'),phone:fd.get('phone')||'',trn:fd.get('trn')||''});
