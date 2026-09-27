@@ -203,8 +203,8 @@ function closePaidOrder(order){
   const cost=orderCost(order);
   postJournal(order.number,'Restaurant sale '+order.number,[
     ...paymentRows,
-    {account:'Food & Beverage Sales',debit:0,credit:totals.net-totals.discount/(1+VAT_RATE)},
-    {account:'VAT Output Payable',debit:0,credit:Math.max(0,totals.total-(totals.net-totals.discount/(1+VAT_RATE)))},
+    {account:'Food & Beverage Sales',debit:0,credit:totals.net},
+    {account:'VAT Output Payable',debit:0,credit:totals.vat},
     {account:'Cost of Goods Sold',debit:cost,credit:0},
     {account:'Inventory',debit:0,credit:cost}
   ]);
@@ -249,7 +249,7 @@ function recordRefund(form){
 }
 function recordExpense(form){
   const fd=new FormData(form),amount=Number(fd.get('amount')||0);if(amount<=0)return;
-  const paymentMethod=fd.get('paymentMethod')||'Cash',net=amount/(1+VAT_RATE),vat=amount-net;
+  const paymentMethod=fd.get('paymentMethod')||'Cash',vatMode=fd.get('vatMode')||'recoverable',net=vatMode==='recoverable'?amount/(1+VAT_RATE):amount,vat=vatMode==='recoverable'?amount-net:0;
   const e={id:uid('EXP'),createdAt:now(),description:fd.get('description'),category:fd.get('category'),amount,net,vat,paymentMethod,note:fd.get('note')||'',staffId:session.currentStaffId};
   db.expenses.unshift(e);
   const payAccount=paymentMethod==='Cash'?'Cash on Hand':paymentMethod==='Bank'?'Bank':'Card Clearing';
@@ -288,7 +288,7 @@ function recordAdjustment(form){
 function recordPurchase(form){
   const fd=new FormData(form),ing=ingredient(fd.get('ingredientId')),qty=Number(fd.get('qty')||0),total=Number(fd.get('total')||0);if(!ing||qty<=0||total<=0)return;
   const net=total/(1+VAT_RATE),vat=total-net;
-  ing.stock+=qty;ing.costPerUnit=net/qty;
+  const oldQty=Number(ing.stock),oldValue=oldQty*Number(ing.costPerUnit);ing.stock=oldQty+qty;ing.costPerUnit=(oldValue+net)/Math.max(1,ing.stock);
   const p={id:uid('PUR'),supplierId:fd.get('supplierId'),invoiceNo:fd.get('invoiceNo')||'',createdAt:now(),total,net,vat,items:[{ingredientId:ing.id,qty,net}]};db.purchases.unshift(p);
   postJournal(p.id,'Purchase receipt '+(p.invoiceNo||p.id),[{account:'Inventory',debit:net,credit:0},{account:'VAT Input Recoverable',debit:vat,credit:0},{account:'Accounts Payable',debit:0,credit:total}]);
   audit('Purchase received',{purchaseId:p.id,ingredientId:ing.id,qty,total});saveDb();session.modal=null;renderApp();toast('Purchase received');
