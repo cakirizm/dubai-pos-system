@@ -8,6 +8,8 @@ function bindUI(){
   document.querySelectorAll('[data-category]').forEach(b=>b.onclick=()=>{session.activeCategory=b.dataset.category;renderApp()});
   document.querySelectorAll('[data-menu-item]').forEach(b=>b.onclick=()=>{session.modal={type:'item',itemId:b.dataset.menuItem};renderApp()});
   document.querySelectorAll('[data-edit-menu]').forEach(b=>b.onclick=()=>{session.modal={type:'menuItem',itemId:b.dataset.editMenu};renderApp()});
+  document.querySelectorAll('[data-receipt]').forEach(b=>b.onclick=()=>{session.modal={type:'receipt',orderId:b.dataset.receipt};renderApp()});
+  document.querySelectorAll('[data-refund]').forEach(b=>b.onclick=()=>{session.modal={type:'refund',orderId:b.dataset.refund};renderApp()});
   document.querySelectorAll('[data-ticket-status]').forEach(b=>b.onclick=()=>updateTicket(b.dataset.ticketStatus,b.dataset.status));
   document.querySelectorAll('[data-item-inc]').forEach(b=>b.onclick=()=>changeItemQty(b.dataset.itemInc,1));
   document.querySelectorAll('[data-item-dec]').forEach(b=>b.onclick=()=>changeItemQty(b.dataset.itemDec,-1));
@@ -27,11 +29,14 @@ function handleAction(action,el){
   if(action==='payment'){session.modal={type:'payment',orderId:session.activeOrderId};return renderApp()}
   if(action==='discount-order'){session.modal={type:'discount',orderId:session.activeOrderId};return renderApp()}
   if(action==='move-table'){session.modal={type:'move',orderId:session.activeOrderId};return renderApp()}
+  if(action==='merge-order'){session.modal={type:'merge',orderId:session.activeOrderId};return renderApp()}
+  if(action==='cancel-order')return cancelOrder(session.activeOrderId)
   if(action==='send-kitchen')return sendToKitchen(session.activeOrderId)
   if(action==='add-note')return addOrderNote()
   if(action==='record-waste'){session.modal={type:'waste'};return renderApp()}
   if(action==='stock-adjust'){session.modal={type:'adjust'};return renderApp()}
   if(action==='new-purchase'){session.modal={type:'purchase'};return renderApp()}
+  if(action==='new-expense'){session.modal={type:'expense'};return renderApp()}
   if(action==='new-reservation'){session.modal={type:'reservation'};return renderApp()}
   if(action==='open-shift'){session.modal={type:'shift'};return renderApp()}
   if(action==='add-menu-item'){session.modal={type:'menuItem'};return renderApp()}
@@ -53,6 +58,9 @@ function bindForms(){
     paymentForm:recordPayment,
     discountForm:applyDiscount,
     moveForm:moveOrder,
+    mergeForm:mergeOrder,
+    refundForm:recordRefund,
+    expenseForm:recordExpense,
     wasteForm:recordWaste,
     adjustForm:recordAdjustment,
     purchaseForm:recordPurchase,
@@ -201,6 +209,52 @@ function closePaidOrder(order){
   audit('Order closed and posted',{orderId:order.id,total:totals.total});
 }
 
+
+function cancelOrder(orderId){
+  const o=orderById(orderId);if(!o||['paid','cancelled'].includes(o.status))return;
+  const reason=prompt('Void reason');if(!reason)return;
+  const sent=o.items.filter(i=>i.sentAt);
+  sent.forEach(restoreRecipe);
+  db.kitchenTickets.filter(t=>t.orderId===o.id&&!['served','cancelled'].includes(t.status)).forEach(t=>t.status='cancelled');
+  o.status='cancelled';o.closedAt=now();o.cancelReason=reason;
+  if(o.tableId){const t=table(o.tableId);if(t)t.status='available'}
+  audit('Order voided',{orderId:o.id,reason});
+  saveDb();session.activeOrderId=null;renderApp();toast('Order voided','bad');
+}
+function mergeOrder(form){
+  const fd=new FormData(form),source=orderById(fd.get('orderId')),target=orderById(fd.get('targetOrderId'));
+  if(!source||!target||source.id===target.id)return;
+  source.items.forEach(i=>target.items.push(i));
+  db.kitchenTickets.filter(t=>t.orderId===source.id).forEach(t=>t.orderId=target.id);
+  db.payments.filter(p=>p.orderId===source.id).forEach(p=>p.orderId=target.id);
+  target.covers=Number(target.covers||0)+Number(source.covers||0);
+  if(source.note)target.note=[target.note,source.note].filter(Boolean).join(' | ');
+  source.status='merged';source.closedAt=now();source.mergedInto=target.id;
+  if(source.tableId){const t=table(source.tableId);if(t)t.status='available'}
+  audit('Orders merged',{sourceOrderId:source.id,targetOrderId:target.id});
+  saveDb();session.modal=null;session.activeOrderId=target.id;renderApp();toast('Orders merged');
+}
+function recordRefund(form){
+  const fd=new FormData(form),o=orderById(fd.get('orderId'));if(!o||o.status!=='paid')return;
+  const original=orderTotals(o).total,already=db.refunds.filter(r=>r.orderId===o.id).reduce((a,r)=>a+r.amount,0);
+  const amount=Math.min(Number(fd.get('amount')||0),Math.max(0,original-already));if(amount<=0)return toast('Nothing left to refund.','bad');
+  const method=fd.get('method')||'Card',reason=fd.get('reason')||'Refund';
+  const ref={id:uid('REF'),orderId:o.id,amount,method,reason,createdAt:now(),staffId:session.currentStaffId};db.refunds.unshift(ref);
+  const vat=amount-(amount/(1+VAT_RATE)),net=amount-vat;
+  const creditAccount=method==='Cash'?'Cash on Hand':method==='Card'?'Card Clearing':method==='Bank Transfer'?'Bank':'Other Clearing';
+  postJournal(ref.id,'Sales refund '+o.number,[{account:'Sales Returns',debit:net,credit:0},{account:'VAT Output Payable',debit:vat,credit:0},{account:creditAccount,debit:0,credit:amount}]);
+  audit('Refund posted',{orderId:o.id,amount,method,reason});saveDb();session.modal=null;renderApp();toast('Refund posted');
+}
+function recordExpense(form){
+  const fd=new FormData(form),amount=Number(fd.get('amount')||0);if(amount<=0)return;
+  const paymentMethod=fd.get('paymentMethod')||'Cash',net=amount/(1+VAT_RATE),vat=amount-net;
+  const e={id:uid('EXP'),createdAt:now(),description:fd.get('description'),category:fd.get('category'),amount,net,vat,paymentMethod,note:fd.get('note')||'',staffId:session.currentStaffId};
+  db.expenses.unshift(e);
+  const payAccount=paymentMethod==='Cash'?'Cash on Hand':paymentMethod==='Bank'?'Bank':'Card Clearing';
+  postJournal(e.id,'Expense '+e.description,[{account:'Expense - '+e.category,debit:net,credit:0},{account:'VAT Input Recoverable',debit:vat,credit:0},{account:payAccount,debit:0,credit:amount}]);
+  audit('Expense posted',{expenseId:e.id,amount,category:e.category});saveDb();session.modal=null;renderApp();toast('Expense posted');
+}
+
 function applyDiscount(form){
   const fd=new FormData(form),o=orderById(fd.get('orderId'));if(!o)return;
   const amount=Math.max(0,Number(fd.get('amount')||0));o.discount=amount;o.discountReason=fd.get('reason')||'';
@@ -257,14 +311,16 @@ function closeShift(form){
 
 function saveMenuItem(form){
   const fd=new FormData(form),id=fd.get('itemId'),existing=id?menuItem(id):null;
+  const recipe=db.ingredients.map(x=>({ingredientId:x.id,qty:Number(fd.get('recipe_'+x.id)||0)})).filter(x=>x.qty>0);
+  const modifierGroupIds=fd.getAll('modifierGroupIds');
   if(existing){
-    existing.name=fd.get('name');existing.categoryId=fd.get('categoryId');existing.stationId=fd.get('stationId');existing.price=Number(fd.get('price')||0);
-    audit('Menu item updated',{itemId:existing.id});
+    existing.name=fd.get('name');existing.categoryId=fd.get('categoryId');existing.stationId=fd.get('stationId');existing.price=Number(fd.get('price')||0);existing.recipe=recipe;existing.modifierGroupIds=modifierGroupIds;
+    audit('Menu item updated',{itemId:existing.id,recipeLines:recipe.length});
   }else{
-    const i={id:uid('P'),name:fd.get('name'),categoryId:fd.get('categoryId'),stationId:fd.get('stationId'),price:Number(fd.get('price')||0),active:true,modifierGroupIds:[],recipe:[]};
-    db.menuItems.push(i);audit('Menu item created',{itemId:i.id});
+    const i={id:uid('P'),name:fd.get('name'),categoryId:fd.get('categoryId'),stationId:fd.get('stationId'),price:Number(fd.get('price')||0),active:true,modifierGroupIds,recipe};
+    db.menuItems.push(i);audit('Menu item created',{itemId:i.id,recipeLines:recipe.length});
   }
-  saveDb();session.modal=null;renderApp();toast('Menu saved');
+  saveDb();session.modal=null;renderApp();toast('Menu and recipe saved');
 }
 function addSupplier(form){
   const fd=new FormData(form);db.suppliers.push({id:uid('SUP'),name:fd.get('name'),phone:fd.get('phone')||'',trn:fd.get('trn')||''});
