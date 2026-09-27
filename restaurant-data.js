@@ -142,13 +142,17 @@ function orderById(id){return db.orders.find(x=>x.id===id)}
 function openOrderForTable(tableId){return db.orders.find(o=>o.tableId===tableId && !['paid','cancelled'].includes(o.status))}
 function activeShift(){return db.shifts.find(s=>s.staffId===session.currentStaffId && !s.closedAt)}
 function orderTotals(order){
-  const net = order.items.reduce((sum,i)=>sum + i.unitPrice*i.qty/(1+VAT_RATE),0);
-  const vat = order.items.reduce((sum,i)=>sum + (i.unitPrice*i.qty - i.unitPrice*i.qty/(1+VAT_RATE)),0);
-  const gross = net+vat;
-  const discount = Number(order.discount||0);
-  const total = Math.max(0,gross-discount);
+  const grossNet = order.items.reduce((sum,i)=>sum + i.unitPrice*i.qty/(1+VAT_RATE),0);
+  const grossVat = order.items.reduce((sum,i)=>sum + (i.unitPrice*i.qty - i.unitPrice*i.qty/(1+VAT_RATE)),0);
+  const gross = grossNet+grossVat;
+  const discount = Math.min(gross,Math.max(0,Number(order.discount||0)));
+  const discountNet = discount/(1+VAT_RATE);
+  const discountVat = discount-discountNet;
+  const net = Math.max(0,grossNet-discountNet);
+  const vat = Math.max(0,grossVat-discountVat);
+  const total = net+vat;
   const paid = db.payments.filter(p=>p.orderId===order.id).reduce((a,p)=>a+p.amount,0);
-  return {net,vat,gross,discount,total,paid,due:Math.max(0,total-paid)};
+  return {net,vat,gross,discount,discountNet,discountVat,total,paid,due:Math.max(0,total-paid)};
 }
 function recipeCost(item){
   return item.recipe.reduce((sum,r)=> {
