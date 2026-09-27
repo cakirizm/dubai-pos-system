@@ -1,0 +1,9 @@
+{
+  "name":"NEXPOS Restaurant UAE",
+  "short_name":"NEXPOS",
+  "start_url":"/",
+  "display":"standalone",
+  "background_color":"#f4f6f8",
+  "theme_color":"#0d1726",
+  "description":"Restaurant POS, KDS, inventory, purchasing and accounting for UAE restaurants"
+}
