@@ -1,4 +1,4 @@
-const NAV = ['Dashboard','Floor & Orders','KDS','Menu','Inventory','Purchasing','Reservations','Staff & Shifts','Reports','Accounting','Settings'];
+const NAV = ['Dashboard','Floor & Orders','KDS','Menu','Inventory','Purchasing','Sales & Refunds','Expenses','Reservations','Staff & Shifts','Reports','Accounting','Settings'];
 
 function toast(msg,type='ok'){
   const old=document.querySelector('.toast'); if(old) old.remove();
@@ -44,6 +44,8 @@ function currentView(){
     case'Menu':return viewMenu();
     case'Inventory':return viewInventory();
     case'Purchasing':return viewPurchasing();
+    case'Sales & Refunds':return viewSales();
+    case'Expenses':return viewExpenses();
     case'Reservations':return viewReservations();
     case'Staff & Shifts':return viewStaff();
     case'Reports':return viewReports();
@@ -115,7 +117,7 @@ function viewOrder(order){
   return `<div class="orderHeader">
     <button class="backBtn" data-action="back-floor">← Floor</button>
     <div><h1>${tableObj?esc(tableObj.name):esc(order.type)} <span>${esc(order.number)}</span></h1><p>${order.covers||1} covers · ${esc(staff(order.waiterId)?.name||'')}</p></div>
-    <div class="orderHeaderActions"><button class="ghost" data-action="move-table">Move</button><button class="ghost" data-action="discount-order">Discount</button><button class="primary" data-action="payment">Payment ${money(totals.due)}</button></div>
+    <div class="orderHeaderActions"><button class="ghost" data-action="move-table">Move</button><button class="ghost" data-action="merge-order">Merge</button><button class="ghost" data-action="discount-order">Discount</button><button class="ghost dangerText" data-action="cancel-order">Void</button><button class="primary" data-action="payment">Payment ${money(totals.due)}</button></div>
   </div>
   <div class="orderLayout">
     <section class="menuPane">
@@ -241,6 +243,23 @@ function viewSettings(){
     <section class="panel settingsPanel"><h3>System Controls</h3><p>This version runs in browser storage for product validation. Production deployment should use authenticated multi-tenant cloud storage, branch permissions, secure backups and payment/KDS device integrations.</p><button class="danger" data-action="reset-system">Reset Demo Data</button><div class="systemInfo"><span>Mode</span><b>Restaurant</b><span>Currency</span><b>AED</b><span>VAT</span><b>5%</b><span>Audit entries</span><b>${db.audit.length}</b></div></section>
   </div>`;
 }
+
+function viewSales(){
+  const paid=db.orders.filter(o=>o.status==='paid').sort((a,b)=>new Date(b.closedAt)-new Date(a.closedAt));
+  return `${pageTitle('Sales & Refunds','Paid checks, tax invoice reprints and controlled refunds')}
+  <section class="panel"><div class="panelHead"><h3>Paid Orders</h3><span>${paid.length} checks</span></div>
+    <table><thead><tr><th>Check</th><th>Closed</th><th>Channel</th><th>Table / Guest</th><th>Total</th><th>Refunded</th><th>Actions</th></tr></thead><tbody>
+    ${paid.map(o=>{const t=orderTotals(o),ref=db.refunds.filter(r=>r.orderId===o.id).reduce((a,r)=>a+r.amount,0);return `<tr><td><b>${esc(o.number)}</b></td><td>${new Date(o.closedAt).toLocaleString('en-AE')}</td><td>${esc(o.type)}</td><td>${esc(o.tableId?table(o.tableId)?.name:(o.customerName||'Walk-in'))}</td><td>${money(t.total)}</td><td>${money(ref)}</td><td><div class="tableActions"><button data-receipt="${o.id}">Receipt</button><button data-refund="${o.id}" ${ref>=t.total-.01?'disabled':''}>Refund</button></div></td></tr>`}).join('')}
+    </tbody></table>
+  </section>`;
+}
+function viewExpenses(){
+  const total=db.expenses.reduce((a,e)=>a+e.amount,0);
+  return `${pageTitle('Expenses','Operating expenses and cash-out controls','<button class="primary" data-action="new-expense">+ Expense</button>')}
+  <div class="statsGrid three">${stat('Total Expenses',money(total),db.expenses.length+' entries')}${stat('Cash Expenses',money(db.expenses.filter(e=>e.paymentMethod==='Cash').reduce((a,e)=>a+e.amount,0)),'affects shift cash')}${stat('Other Expenses',money(db.expenses.filter(e=>e.paymentMethod!=='Cash').reduce((a,e)=>a+e.amount,0)),'bank / card')}</div>
+  <section class="panel"><div class="panelHead"><h3>Expense Ledger</h3><span>Double-entry posted</span></div><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Payment</th><th>Amount</th></tr></thead><tbody>${db.expenses.map(e=>`<tr><td>${new Date(e.createdAt).toLocaleString('en-AE')}</td><td><b>${esc(e.description)}</b></td><td>${esc(e.category)}</td><td>${esc(e.paymentMethod)}</td><td>${money(e.amount)}</td></tr>`).join('')}</tbody></table></section>`;
+}
+
 function modalView(){
   if(!session.modal)return'';
   const m=session.modal;
@@ -249,6 +268,9 @@ function modalView(){
   if(m.type==='newOrder')return newOrderModal(m.orderType,m.tableId);
   if(m.type==='discount')return discountModal(m.orderId);
   if(m.type==='move')return moveModal(m.orderId);
+  if(m.type==='merge')return mergeModal(m.orderId);
+  if(m.type==='refund')return refundModal(m.orderId);
+  if(m.type==='expense')return expenseModal();
   if(m.type==='waste')return wasteModal();
   if(m.type==='adjust')return adjustModal();
   if(m.type==='purchase')return purchaseModal();
@@ -282,6 +304,19 @@ function newOrderModal(type='Dine-in',tableId=''){
   <button class="primary full">Open Order</button></form>`)
 }
 function discountModal(orderId){return modalShell('Apply Discount',`<form id="discountForm"><input type="hidden" name="orderId" value="${orderId}"><label class="field">Discount AED<input name="amount" type="number" step="0.01" min="0"></label><label class="field">Reason<input name="reason" required placeholder="Manager comp, promotion…"></label><button class="primary full">Apply Discount</button></form>`)}
+
+function mergeModal(orderId){
+  const o=orderById(orderId),targets=db.orders.filter(x=>x.id!==orderId&&!['paid','cancelled'].includes(x.status));
+  return modalShell('Merge Orders',`<form id="mergeForm"><input type="hidden" name="orderId" value="${orderId}"><label class="field">Merge into open order<select name="targetOrderId">${targets.map(x=>`<option value="${x.id}">${esc(x.number)} · ${esc(x.tableId?table(x.tableId)?.name:x.type)} · ${money(orderTotals(x).total)}</option>`).join('')}</select></label><p class="hint">Items, kitchen tickets and payments remain auditable. Source order will be marked merged.</p><button class="primary full" ${targets.length?'':'disabled'}>Merge Orders</button></form>`)
+}
+function refundModal(orderId){
+  const o=orderById(orderId),t=orderTotals(o),already=db.refunds.filter(r=>r.orderId===orderId).reduce((a,r)=>a+r.amount,0),max=Math.max(0,t.total-already);
+  return modalShell('Refund '+esc(o.number),`<form id="refundForm"><input type="hidden" name="orderId" value="${orderId}"><div class="amountDue"><span>Refundable balance</span><strong>${money(max)}</strong></div><label class="field">Refund amount<input name="amount" type="number" min="0.01" max="${max.toFixed(2)}" step="0.01" value="${max.toFixed(2)}"></label><label class="field">Method<select name="method"><option>Cash</option><option>Card</option><option>Bank Transfer</option><option>Other</option></select></label><label class="field">Reason<input name="reason" required placeholder="Customer return, billing correction…"></label><button class="primary full">Post Refund</button></form>`)
+}
+function expenseModal(){
+  return modalShell('Record Expense',`<form id="expenseForm"><label class="field">Description<input name="description" required></label><label class="field">Category<select name="category"><option>Rent</option><option>Utilities</option><option>Marketing</option><option>Transport</option><option>Cleaning</option><option>Repairs</option><option>Staff</option><option>General</option></select></label><label class="field">Amount incl. VAT<input name="amount" type="number" min="0.01" step="0.01" required></label><label class="field">Payment method<select name="paymentMethod"><option>Cash</option><option>Card</option><option>Bank</option></select></label><label class="field">Supplier / note<input name="note"></label><button class="primary full">Post Expense</button></form>`)
+}
+
 function moveModal(orderId){return modalShell('Move Table',`<form id="moveForm"><input type="hidden" name="orderId" value="${orderId}"><label class="field">New table<select name="tableId">${db.tables.filter(t=>!openOrderForTable(t.id)).map(t=>`<option value="${t.id}">${esc(t.name)} · ${esc(db.sections.find(s=>s.id===t.sectionId)?.name||'')}</option>`).join('')}</select></label><button class="primary full">Move Order</button></form>`)}
 function wasteModal(){return modalShell('Record Waste',`<form id="wasteForm"><label class="field">Ingredient<select name="ingredientId">${db.ingredients.map(i=>`<option value="${i.id}">${esc(i.name)} · ${i.stock} ${esc(i.unit)}</option>`).join('')}</select></label><label class="field">Quantity<input name="qty" type="number" step="0.01" required></label><label class="field">Reason<select name="reason"><option>Spoilage</option><option>Preparation Waste</option><option>Damaged</option><option>Staff Meal</option><option>Complimentary</option><option>Other</option></select></label><button class="primary full">Record Waste</button></form>`)}
 function adjustModal(){return modalShell('Stock Adjustment',`<form id="adjustForm"><label class="field">Ingredient<select name="ingredientId">${db.ingredients.map(i=>`<option value="${i.id}">${esc(i.name)}</option>`).join('')}</select></label><label class="field">Actual stock count<input name="actual" type="number" step="0.01" required></label><label class="field">Reason<input name="reason" value="Stock count"></label><button class="primary full">Post Adjustment</button></form>`)}
@@ -297,7 +332,11 @@ function receiptModal(orderId){
 }
 function menuItemModal(itemId){
   const i=itemId?menuItem(itemId):null;
-  return modalShell(i?'Edit Menu Item':'Add Menu Item',`<form id="menuItemForm"><input type="hidden" name="itemId" value="${i?.id||''}"><label class="field">Name<input name="name" value="${esc(i?.name||'')}" required></label><label class="field">Category<select name="categoryId">${db.menuCategories.map(c=>`<option value="${c.id}" ${i?.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><label class="field">Kitchen station<select name="stationId">${db.stations.map(s=>`<option value="${s.id}" ${i?.stationId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label class="field">Price incl. VAT<input name="price" type="number" step="0.01" value="${i?.price||''}" required></label><p class="hint">Recipes and modifier groups are preserved for existing items. Full recipe editor is available from inventory recipe setup in the next cloud build.</p><button class="primary full">Save Menu Item</button></form>`)
+  const recipeMap=Object.fromEntries((i?.recipe||[]).map(r=>[r.ingredientId,r.qty]));
+  return modalShell(i?'Edit Menu Item':'Add Menu Item',`<form id="menuItemForm"><input type="hidden" name="itemId" value="${i?.id||''}"><label class="field">Name<input name="name" value="${esc(i?.name||'')}" required></label><label class="field">Category<select name="categoryId">${db.menuCategories.map(c=>`<option value="${c.id}" ${i?.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><label class="field">Kitchen station<select name="stationId">${db.stations.map(s=>`<option value="${s.id}" ${i?.stationId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label class="field">Price incl. VAT<input name="price" type="number" step="0.01" value="${i?.price||''}" required></label>
+  <div class="recipeEditor"><h4>Recipe</h4>${db.ingredients.map(x=>`<label><span>${esc(x.name)} <small>${esc(x.unit)}</small></span><input name="recipe_${x.id}" type="number" min="0" step="0.01" value="${recipeMap[x.id]||''}" placeholder="0"></label>`).join('')}</div>
+  <div class="recipeEditor"><h4>Modifier Groups</h4>${db.modifiers.map(g=>`<label class="checkLine"><input type="checkbox" name="modifierGroupIds" value="${g.id}" ${i?.modifierGroupIds?.includes(g.id)?'checked':''}><span>${esc(g.name)}</span></label>`).join('')}</div>
+  <button class="primary full">Save Menu Item</button></form>`,true)
 }
 function supplierModal(){return modalShell('Add Supplier',`<form id="supplierForm"><label class="field">Supplier name<input name="name" required></label><label class="field">Phone<input name="phone"></label><label class="field">TRN<input name="trn"></label><button class="primary full">Add Supplier</button></form>`)}
 function staffModal(){return modalShell('Add Staff',`<form id="staffForm"><label class="field">Name<input name="name" required></label><label class="field">Role<select name="role"><option>Waiter</option><option>Cashier</option><option>Kitchen</option><option>Manager</option><option>Owner</option></select></label><label class="field">PIN<input name="pin" inputmode="numeric" maxlength="6" required></label><button class="primary full">Add Staff</button></form>`)}
