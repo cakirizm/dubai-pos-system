@@ -97,6 +97,7 @@ const seedRestaurant = {
   orders:[],
   kitchenTickets:[],
   payments:[],
+  refunds:[],
   purchases:[],
   wastes:[],
   stockAdjustments:[],
