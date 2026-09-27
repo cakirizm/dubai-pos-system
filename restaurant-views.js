@@ -206,12 +206,14 @@ function viewStaff(){
 }
 function viewReports(){
   const paid=db.orders.filter(o=>o.status==='paid');
-  const sales=paid.reduce((a,o)=>a+orderTotals(o).total,0);
+  const refunds=db.refunds.reduce((a,r)=>a+r.amount,0);
+  const grossSales=paid.reduce((a,o)=>a+orderTotals(o).total,0);
+  const sales=Math.max(0,grossSales-refunds);
   const byType={},byItem={},byWaiter={},byPay={};
   paid.forEach(o=>{byType[o.type]=(byType[o.type]||0)+orderTotals(o).total;byWaiter[o.waiterId]=(byWaiter[o.waiterId]||0)+orderTotals(o).total;o.items.forEach(i=>byItem[i.name]=(byItem[i.name]||0)+i.qty)});
   db.payments.forEach(p=>byPay[p.method]=(byPay[p.method]||0)+p.amount);
   return `${pageTitle('Reports','Sales, channel, payment, item and staff performance')}
-  <div class="statsGrid three">${stat('Recorded Sales',money(sales),paid.length+' paid orders')}${stat('Theoretical Food Cost',money(paid.reduce((a,o)=>a+orderCost(o),0)),'recipe based')}${stat('Gross Margin',sales?(((sales-paid.reduce((a,o)=>a+orderCost(o),0))/sales)*100).toFixed(1)+'%':'0.0%','before operating expenses')}</div>
+  <div class="statsGrid three">${stat('Net Sales',money(sales),'gross '+money(grossSales)+' · refunds '+money(refunds))}${stat('Theoretical Food Cost',money(paid.reduce((a,o)=>a+orderCost(o),0)),'recipe based')}${stat('Operating Expenses',money(db.expenses.reduce((a,e)=>a+e.amount,0)),'recorded expenses')}</div>
   <div class="grid2">
     ${reportBox('Sales by Channel',Object.entries(byType).map(([k,v])=>[k,money(v)]))}
     ${reportBox('Payments',Object.entries(byPay).map(([k,v])=>[k,money(v)]))}
@@ -278,6 +280,7 @@ function modalView(){
   if(m.type==='shift')return shiftModal();
   if(m.type==='receipt')return receiptModal(m.orderId);
   if(m.type==='menuItem')return menuItemModal(m.itemId);
+  if(m.type==='modifierAdmin')return modifierAdminModal();
   if(m.type==='supplier')return supplierModal();
   if(m.type==='staff')return staffModal();
   return'';
@@ -333,10 +336,13 @@ function receiptModal(orderId){
 function menuItemModal(itemId){
   const i=itemId?menuItem(itemId):null;
   const recipeMap=Object.fromEntries((i?.recipe||[]).map(r=>[r.ingredientId,r.qty]));
-  return modalShell(i?'Edit Menu Item':'Add Menu Item',`<form id="menuItemForm"><input type="hidden" name="itemId" value="${i?.id||''}"><label class="field">Name<input name="name" value="${esc(i?.name||'')}" required></label><label class="field">Category<select name="categoryId">${db.menuCategories.map(c=>`<option value="${c.id}" ${i?.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><label class="field">Kitchen station<select name="stationId">${db.stations.map(s=>`<option value="${s.id}" ${i?.stationId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label class="field">Price incl. VAT<input name="price" type="number" step="0.01" value="${i?.price||''}" required></label>
+  return modalShell(i?'Edit Menu Item':'Add Menu Item',`<form id="menuItemForm"><input type="hidden" name="itemId" value="${i?.id||''}"><label class="field">Name<input name="name" value="${esc(i?.name||'')}" required></label><label class="field">Category<select name="categoryId">${db.menuCategories.map(c=>`<option value="${c.id}" ${i?.categoryId===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><label class="field">Kitchen station<select name="stationId">${db.stations.map(s=>`<option value="${s.id}" ${i?.stationId===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label><label class="field">Price incl. VAT<input name="price" type="number" step="0.01" value="${i?.price||''}" required></label><label class="checkLine"><input type="checkbox" name="active" ${i?.active!==false?'checked':''}><span>Available for sale</span></label>
   <div class="recipeEditor"><h4>Recipe</h4>${db.ingredients.map(x=>`<label><span>${esc(x.name)} <small>${esc(x.unit)}</small></span><input name="recipe_${x.id}" type="number" min="0" step="0.01" value="${recipeMap[x.id]||''}" placeholder="0"></label>`).join('')}</div>
   <div class="recipeEditor"><h4>Modifier Groups</h4>${db.modifiers.map(g=>`<label class="checkLine"><input type="checkbox" name="modifierGroupIds" value="${g.id}" ${i?.modifierGroupIds?.includes(g.id)?'checked':''}><span>${esc(g.name)}</span></label>`).join('')}</div>
   <button class="primary full">Save Menu Item</button></form>`,true)
+}
+function modifierAdminModal(){
+  return modalShell('Add Modifier Group',`<form id="modifierAdminForm"><label class="field">Group name<input name="name" required placeholder="Steak Cooking"></label><label class="field">Selection<select name="required"><option value="true">Required</option><option value="false">Optional</option></select></label><label class="field">Maximum selections<input name="max" type="number" min="1" value="1"></label><label class="field">Options <small>One per line: Name | Extra price</small><textarea name="options" rows="7" placeholder="Rare | 0&#10;Medium | 0&#10;Extra Sauce | 3"></textarea></label><button class="primary full">Create Modifier Group</button></form>`)
 }
 function supplierModal(){return modalShell('Add Supplier',`<form id="supplierForm"><label class="field">Supplier name<input name="name" required></label><label class="field">Phone<input name="phone"></label><label class="field">TRN<input name="trn"></label><button class="primary full">Add Supplier</button></form>`)}
 function staffModal(){return modalShell('Add Staff',`<form id="staffForm"><label class="field">Name<input name="name" required></label><label class="field">Role<select name="role"><option>Waiter</option><option>Cashier</option><option>Kitchen</option><option>Manager</option><option>Owner</option></select></label><label class="field">PIN<input name="pin" inputmode="numeric" maxlength="6" required></label><button class="primary full">Add Staff</button></form>`)}
